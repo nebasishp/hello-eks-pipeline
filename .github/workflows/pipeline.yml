@@ -11,17 +11,14 @@ permissions:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
 
     steps:
-
-      # 1. Checkout source code
+      # 1. Checkout
       - name: Get My Code
         uses: actions/checkout@v4
 
-
-      # 2. Setup Java 21
+      # 2. Java 21
       - name: Setup Java 21
         uses: actions/setup-java@v4
         with:
@@ -29,15 +26,11 @@ jobs:
           java-version: '21'
           cache: maven
 
-
-      # 3. Maven Build
-      # Tests temporarily skipped because GitHub runner
-      # cannot directly access our RDS.
+      # 3. Build
       - name: Build Spring Boot Application
         run: mvn clean package -DskipTests
 
-
-      # 4. SonarQube Scan
+      # 4. Sonar
       - name: SonarQube Scan
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -47,31 +40,58 @@ jobs:
           -Dsonar.projectKey=nebasishp_hello-eks-pipeline
           -Dsonar.token=${{ secrets.SONAR_TOKEN }}
 
-
-      # 5. Build Docker Image
+      # 5. Docker build
       - name: Build Docker Image
-        run: |
-          docker build -t hello-eks-pipeline:1.0 .
+        run: docker build -t hello-eks-pipeline:1.0 .
 
-
-      # 6. Debug GitHub context
-      # Temporary step to verify what GitHub is sending
-      # before AWS OIDC authentication.
-      - name: Debug GitHub OIDC Context
+      # 6. Normal GitHub context
+      - name: Debug GitHub Context
         run: |
           echo "repository=${{ github.repository }}"
           echo "ref=${{ github.ref }}"
           echo "event=${{ github.event_name }}"
 
+      # 7. IMPORTANT - show actual OIDC claims
+      - name: Show Actual OIDC Subject
+        shell: bash
+        run: |
+          RESPONSE=$(curl -sLS \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com")
 
-      # 7. Login to AWS using OIDC
+          TOKEN=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['value'])")
+
+          export TOKEN
+
+          python3 <<'PY'
+          import os
+          import json
+          import base64
+
+          token = os.environ["TOKEN"]
+          payload = token.split(".")[1]
+          payload += "=" * (-len(payload) % 4)
+
+          claims = json.loads(
+              base64.urlsafe_b64decode(payload.encode()).decode()
+          )
+
+          print("OIDC aud =", claims.get("aud"))
+          print("OIDC sub =", claims.get("sub"))
+          print("repository =", claims.get("repository"))
+          print("repository_id =", claims.get("repository_id"))
+          print("repository_owner =", claims.get("repository_owner"))
+          print("repository_owner_id =", claims.get("repository_owner_id"))
+          print("ref =", claims.get("ref"))
+          PY
+
+      # 8. AWS OIDC login
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::434655688160:role/hello-eks-github-role
           aws-region: ap-south-1
 
-
-      # 8. Verify AWS Authentication
+      # 9. Verify AWS identity
       - name: Verify AWS Identity
         run: aws sts get-caller-identity
