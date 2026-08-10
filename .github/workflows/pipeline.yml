@@ -2,13 +2,18 @@ name: My Pipeline
 
 on:
   push:
+    branches:
+      - main
+
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-
       - name: Get My Code
         uses: actions/checkout@v4
 
@@ -18,10 +23,9 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-#      - name: Build Spring Boot Application
-#        run: mvn clean package
       - name: Build Spring Boot Application
         run: mvn clean package -DskipTests
+
       - name: SonarQube Scan
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -29,8 +33,10 @@ jobs:
           mvn org.sonarsource.scanner.maven:sonar-maven-plugin:sonar
           -Dsonar.organization=nebasishp
           -Dsonar.projectKey=nebasishp_hello-eks-pipeline
+
       - name: Build Docker Image
         run: docker build -t hello-eks-pipeline:1.0 .
+
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
