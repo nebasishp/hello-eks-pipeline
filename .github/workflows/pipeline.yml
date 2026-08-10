@@ -6,26 +6,38 @@ on:
       - main
 
 permissions:
-  id-token: write
   contents: read
+  id-token: write
 
 jobs:
   build:
+
     runs-on: ubuntu-latest
 
     steps:
+
+      # 1. Checkout source code
       - name: Get My Code
         uses: actions/checkout@v4
 
+
+      # 2. Setup Java 21
       - name: Setup Java 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
+          cache: maven
 
+
+      # 3. Maven Build
+      # Tests temporarily skipped because GitHub runner
+      # cannot directly access our RDS.
       - name: Build Spring Boot Application
         run: mvn clean package -DskipTests
 
+
+      # 4. SonarQube Scan
       - name: SonarQube Scan
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -33,12 +45,33 @@ jobs:
           mvn org.sonarsource.scanner.maven:sonar-maven-plugin:sonar
           -Dsonar.organization=nebasishp
           -Dsonar.projectKey=nebasishp_hello-eks-pipeline
+          -Dsonar.token=${{ secrets.SONAR_TOKEN }}
 
+
+      # 5. Build Docker Image
       - name: Build Docker Image
-        run: docker build -t hello-eks-pipeline:1.0 .
+        run: |
+          docker build -t hello-eks-pipeline:1.0 .
 
+
+      # 6. Debug GitHub context
+      # Temporary step to verify what GitHub is sending
+      # before AWS OIDC authentication.
+      - name: Debug GitHub OIDC Context
+        run: |
+          echo "repository=${{ github.repository }}"
+          echo "ref=${{ github.ref }}"
+          echo "event=${{ github.event_name }}"
+
+
+      # 7. Login to AWS using OIDC
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::434655688160:role/hello-eks-github-role
           aws-region: ap-south-1
+
+
+      # 8. Verify AWS Authentication
+      - name: Verify AWS Identity
+        run: aws sts get-caller-identity
