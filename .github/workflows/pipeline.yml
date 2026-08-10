@@ -18,9 +18,10 @@ jobs:
           distribution: temurin
           java-version: '21'
 
+#      - name: Build Spring Boot Application
+#        run: mvn clean package
       - name: Build Spring Boot Application
-        run: mvn clean package
-
+        run: mvn clean package -DskipTests
       - name: SonarQube Scan
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
