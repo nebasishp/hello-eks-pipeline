@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+
+metadata:
+  name: hello-eks-service
+
+spec:
+  type: LoadBalancer
+
+  selector:
+    app: hello-eks
+
+  ports:
+    - port: 80
+      targetPort: 8080

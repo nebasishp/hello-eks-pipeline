@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: hello-eks-deployment
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: hello-eks
+
+  template:
+    metadata:
+      labels:
+        app: hello-eks
+
+    spec:
+      serviceAccountName: hello-eks-service-account
+
+      containers:
+        - name: hello-eks-container
+          image: 434655688160.dkr.ecr.ap-south-1.amazonaws.com/hello-eks-pipeline:1.0
+
+          ports:
+            - containerPort: 8080

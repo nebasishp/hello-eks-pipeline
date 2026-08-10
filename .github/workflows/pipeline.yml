@@ -30,3 +30,8 @@ jobs:
           -Dsonar.projectKey=nebasishp_hello-eks-pipeline
       - name: Build Docker Image
         run: docker build -t hello-eks-pipeline:1.0 .
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::434655688160:role/hello-eks-github-role
+          aws-region: ap-south-1

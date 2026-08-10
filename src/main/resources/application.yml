@@ -1,0 +1,21 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: hello-eks-pipeline
+
+  datasource:
+    url: jdbc:mysql://hello-eks-db.ct66oymmeskc.ap-south-1.rds.amazonaws.com:3306/employee_db
+    username: admin
+    password: root1234
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+
+aws:
+  region: ap-south-1
+  s3:
+    bucket: nebasishp-hello-eks-employee-files
