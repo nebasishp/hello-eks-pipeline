@@ -21,5 +21,13 @@ jobs:
       - name: Build Spring Boot Application
         run: mvn clean package
 
+      - name: SonarQube Scan
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: >
+          mvn sonar:sonar
+          -Dsonar.organization=nebasishp
+          -Dsonar.projectKey=nebasishp_hello-eks-pipeline
+
       - name: Build Docker Image
         run: docker build -t hello-eks-pipeline:1.0 .
