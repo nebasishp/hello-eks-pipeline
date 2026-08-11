@@ -94,6 +94,10 @@ jobs:
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
+      - name: Tag and Push Docker Image to ECR
+        run: |
+          docker tag hello-eks-pipeline:1.0 434655688160.dkr.ecr.ap-south-1.amazonaws.com/hello-eks-pipeline:1.0
+          docker push 434655688160.dkr.ecr.ap-south-1.amazonaws.com/hello-eks-pipeline:1.0
       # 9. Verify AWS identity
       - name: Verify AWS Identity
         run: aws sts get-caller-identity
