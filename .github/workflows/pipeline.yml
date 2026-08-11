@@ -91,7 +91,9 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::434655688160:role/hello-eks-github-role
           aws-region: ap-south-1
-
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
       # 9. Verify AWS identity
       - name: Verify AWS Identity
         run: aws sts get-caller-identity
