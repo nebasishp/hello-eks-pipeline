@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: hello-eks-green
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: hello-eks
+      version: green
+
+  template:
+    metadata:
+      labels:
+        app: hello-eks
+        version: green
+
+    spec:
+      serviceAccountName: hello-eks-service-account
+
+      containers:
+        - name: hello-eks-container
+
+          # For learning, start Green with the same working image.
+          # Later pipeline will put the NEW SHA image here.
+          image: 434655688160.dkr.ecr.ap-south-1.amazonaws.com/hello-eks-pipeline:bb8a07c6bf2deda9840bf5fb2a11396f285d14f0
+
+          ports:
+            - containerPort: 8080

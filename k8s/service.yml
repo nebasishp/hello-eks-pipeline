@@ -9,6 +9,7 @@ spec:
 
   selector:
     app: hello-eks
+    version: green
 
   ports:
     - port: 80

@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: hello-eks-blue
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: hello-eks
+      version: blue
+
+  template:
+    metadata:
+      labels:
+        app: hello-eks
+        version: blue
+
+    spec:
+      serviceAccountName: hello-eks-service-account
+
+      containers:
+        - name: hello-eks-container
+
+          # For now use the currently known working image.
+          image: 434655688160.dkr.ecr.ap-south-1.amazonaws.com/hello-eks-pipeline:bb8a07c6bf2deda9840bf5fb2a11396f285d14f0
+
+          ports:
+            - containerPort: 8080

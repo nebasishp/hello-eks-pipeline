@@ -1,4 +1,4 @@
-name: My Pipeline
+name: Blue Green EKS Pipeline
 
 on:
   push:
@@ -9,17 +9,28 @@ permissions:
   contents: read
   id-token: write
 
+env:
+  AWS_REGION: ap-south-1
+  EKS_CLUSTER: hello-eks-cluster
+  ECR_REPOSITORY: hello-eks-pipeline
+  ECR_REGISTRY: 434655688160.dkr.ecr.ap-south-1.amazonaws.com
+
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
 
-      # 1. Checkout source code
+      # =========================================================
+      # 1. CHECKOUT
+      # =========================================================
       - name: Get My Code
         uses: actions/checkout@v4
 
-      # 2. Setup Java 21
+
+      # =========================================================
+      # 2. JAVA
+      # =========================================================
       - name: Setup Java 21
         uses: actions/setup-java@v4
         with:
@@ -27,11 +38,17 @@ jobs:
           java-version: '21'
           cache: maven
 
-      # 3. Build Spring Boot application
+
+      # =========================================================
+      # 3. MAVEN BUILD
+      # =========================================================
       - name: Build Spring Boot Application
         run: mvn clean package -DskipTests
 
-      # 4. SonarQube scan
+
+      # =========================================================
+      # 4. SONAR
+      # =========================================================
       - name: SonarQube Scan
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -41,113 +58,208 @@ jobs:
           -Dsonar.projectKey=nebasishp_hello-eks-pipeline
           -Dsonar.token=${{ secrets.SONAR_TOKEN }}
 
-      # 5. Build Docker image with Git commit SHA as tag
+
+      # =========================================================
+      # 5. BUILD DOCKER IMAGE
+      # Each Git commit gets its own Docker image
+      # =========================================================
       - name: Build Docker Image
         run: |
           docker build \
-            -t hello-eks-pipeline:${{ github.sha }} .
+            -t $ECR_REPOSITORY:${{ github.sha }} .
 
-      # 6. Debug GitHub context
-      - name: Debug GitHub Context
-        run: |
-          echo "repository=${{ github.repository }}"
-          echo "ref=${{ github.ref }}"
-          echo "event=${{ github.event_name }}"
-          echo "commit=${{ github.sha }}"
 
-      # 7. Show actual OIDC subject
-      - name: Show Actual OIDC Subject
-        shell: bash
-        run: |
-          RESPONSE=$(curl -sLS \
-            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com")
-
-          TOKEN=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['value'])")
-
-          export TOKEN
-
-          python3 <<'PY'
-          import os
-          import json
-          import base64
-
-          token = os.environ["TOKEN"]
-          payload = token.split(".")[1]
-          payload += "=" * (-len(payload) % 4)
-
-          claims = json.loads(
-              base64.urlsafe_b64decode(payload.encode()).decode()
-          )
-
-          print("OIDC aud =", claims.get("aud"))
-          print("OIDC sub =", claims.get("sub"))
-          print("repository =", claims.get("repository"))
-          print("repository_id =", claims.get("repository_id"))
-          print("repository_owner =", claims.get("repository_owner"))
-          print("repository_owner_id =", claims.get("repository_owner_id"))
-          print("ref =", claims.get("ref"))
-          PY
-
-      # 8. Authenticate to AWS using GitHub OIDC
+      # =========================================================
+      # 6. AWS LOGIN USING GITHUB OIDC
+      # =========================================================
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::434655688160:role/hello-eks-github-role
-          aws-region: ap-south-1
+          aws-region: ${{ env.AWS_REGION }}
 
-      # 9. Verify AWS identity
+
+      # =========================================================
+      # 7. VERIFY AWS LOGIN
+      # =========================================================
       - name: Verify AWS Identity
         run: aws sts get-caller-identity
 
-      # 10. Login to Amazon ECR
+
+      # =========================================================
+      # 8. LOGIN TO ECR
+      # =========================================================
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
 
-      # 11. Tag and push Docker image to ECR
-      - name: Tag and Push Docker Image to ECR
+
+      # =========================================================
+      # 9. TAG + PUSH IMAGE TO ECR
+      # =========================================================
+      - name: Push Docker Image to ECR
         run: |
           docker tag \
-            hello-eks-pipeline:${{ github.sha }} \
-            434655688160.dkr.ecr.ap-south-1.amazonaws.com/hello-eks-pipeline:${{ github.sha }}
+            $ECR_REPOSITORY:${{ github.sha }} \
+            $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }}
 
           docker push \
-            434655688160.dkr.ecr.ap-south-1.amazonaws.com/hello-eks-pipeline:${{ github.sha }}
+            $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }}
 
-      # 12. Connect GitHub runner to EKS
+
+      # =========================================================
+      # 10. CONNECT TO EKS
+      # =========================================================
       - name: Configure EKS
         run: |
           aws eks update-kubeconfig \
-            --region ap-south-1 \
-            --name hello-eks-cluster
+            --region $AWS_REGION \
+            --name $EKS_CLUSTER
 
-      # 13. Verify EKS connection
+
+      # =========================================================
+      # 11. VERIFY EKS
+      # =========================================================
       - name: Verify EKS Connection
-        run: kubectl get nodes
-
-      # 14. Apply Kubernetes base resources
-      - name: Apply Kubernetes Resources
-        run: |
-          kubectl apply -f k8s/service-account.yml
-          kubectl apply -f k8s/service.yml
-          kubectl apply -f k8s/deployment.yml
-
-      # 15. Replace deployment image with current Git commit image
-      - name: Deploy Current Git Version
-        run: |
-          kubectl set image deployment/hello-eks-deployment \
-            hello-eks-container=434655688160.dkr.ecr.ap-south-1.amazonaws.com/hello-eks-pipeline:${{ github.sha }}
-
-      # 16. Wait for rollout to complete
-      - name: Verify Deployment Rollout
-        run: |
-          kubectl rollout status deployment/hello-eks-deployment \
-            --timeout=180s
-
-      # 17. Show final resources
-      - name: Show EKS Resources
         run: |
           kubectl get nodes
+
+
+      # =========================================================
+      # 12. FIND WHICH COLOR IS CURRENTLY LIVE
+      #
+      # Example:
+      #
+      # Service = blue
+      # Therefore:
+      # ACTIVE   = blue
+      # INACTIVE = green
+      #
+      # New version will go to GREEN.
+      # =========================================================
+      - name: Find Active and Inactive Color
+        id: colors
+        shell: bash
+        run: |
+          ACTIVE=$(kubectl get service hello-eks-service \
+            -o jsonpath='{.spec.selector.version}')
+
+          echo "Current active color = $ACTIVE"
+
+          if [ "$ACTIVE" = "blue" ]; then
+            INACTIVE="green"
+          else
+            INACTIVE="blue"
+          fi
+
+          echo "New version will deploy to = $INACTIVE"
+
+          echo "active=$ACTIVE" >> "$GITHUB_OUTPUT"
+          echo "inactive=$INACTIVE" >> "$GITHUB_OUTPUT"
+
+
+      # =========================================================
+      # 13. DEPLOY NEW IMAGE TO INACTIVE COLOR
+      #
+      # If BLUE is live:
+      # update GREEN
+      #
+      # If GREEN is live:
+      # update BLUE
+      # =========================================================
+      - name: Deploy New Version to Inactive Color
+        shell: bash
+        run: |
+          INACTIVE="${{ steps.colors.outputs.inactive }}"
+
+          kubectl set image \
+            deployment/hello-eks-$INACTIVE \
+            hello-eks-container=$ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }}
+
+
+      # =========================================================
+      # 14. WAIT UNTIL NEW VERSION IS HEALTHY
+      #
+      # IMPORTANT:
+      # Traffic has NOT switched yet.
+      # Users are still using old version.
+      # =========================================================
+      - name: Wait for New Version
+        shell: bash
+        run: |
+          INACTIVE="${{ steps.colors.outputs.inactive }}"
+
+          kubectl rollout status \
+            deployment/hello-eks-$INACTIVE \
+            --timeout=180s
+
+
+      # =========================================================
+      # 15. SHOW BOTH BLUE AND GREEN
+      # =========================================================
+      - name: Show Blue Green Pods
+        run: |
+          kubectl get pods \
+            -l app=hello-eks \
+            -o wide \
+            --show-labels
+
+
+      # =========================================================
+      # 16. SWITCH LIVE TRAFFIC
+      #
+      # This is the actual Blue-Green switch.
+      #
+      # Service:
+      # blue → green
+      #
+      # OR
+      #
+      # green → blue
+      # =========================================================
+      - name: Switch Traffic to New Version
+        shell: bash
+        run: |
+          INACTIVE="${{ steps.colors.outputs.inactive }}"
+
+          kubectl patch service hello-eks-service \
+            --type merge \
+            -p "{\"spec\":{\"selector\":{\"app\":\"hello-eks\",\"version\":\"$INACTIVE\"}}}"
+
+
+      # =========================================================
+      # 17. VERIFY SERVICE SELECTOR
+      # =========================================================
+      - name: Verify Active Color
+        run: |
+          echo "Service is now pointing to:"
+
+          kubectl get service hello-eks-service \
+            -o jsonpath='{.spec.selector.version}'
+
+          echo ""
+
+
+      # =========================================================
+      # 18. VERIFY SERVICE ENDPOINT
+      # =========================================================
+      - name: Verify Service Endpoint
+        run: |
+          kubectl get endpoints hello-eks-service
+
+
+      # =========================================================
+      # 19. FINAL STATUS
+      # =========================================================
+      - name: Final Deployment Status
+        run: |
+          echo "=============================="
+          echo "BLUE GREEN DEPLOYMENT COMPLETE"
+          echo "=============================="
+
           kubectl get deployments
+
+          echo ""
           kubectl get pods -o wide
-          kubectl get svc
+
+          echo ""
+          kubectl get svc hello-eks-service
