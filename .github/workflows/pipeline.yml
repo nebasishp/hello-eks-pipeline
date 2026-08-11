@@ -14,11 +14,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Checkout
+
+      # 1. Checkout source code
       - name: Get My Code
         uses: actions/checkout@v4
 
-      # 2. Java 21
+      # 2. Setup Java 21
       - name: Setup Java 21
         uses: actions/setup-java@v4
         with:
@@ -26,13 +27,11 @@ jobs:
           java-version: '21'
           cache: maven
 
-      # 3. Maven Build
-      # Temporarily skipping tests because GitHub runner
-      # cannot directly reach our RDS.
+      # 3. Build Spring Boot application
       - name: Build Spring Boot Application
         run: mvn clean package -DskipTests
 
-      # 4. SonarQube Scan
+      # 4. SonarQube scan
       - name: SonarQube Scan
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -42,18 +41,21 @@ jobs:
           -Dsonar.projectKey=nebasishp_hello-eks-pipeline
           -Dsonar.token=${{ secrets.SONAR_TOKEN }}
 
-      # 5. Build Docker Image
+      # 5. Build Docker image with Git commit SHA as tag
       - name: Build Docker Image
-        run: docker build -t hello-eks-pipeline:1.0 .
+        run: |
+          docker build \
+            -t hello-eks-pipeline:${{ github.sha }} .
 
-      # 6. Temporary GitHub debug
+      # 6. Debug GitHub context
       - name: Debug GitHub Context
         run: |
           echo "repository=${{ github.repository }}"
           echo "ref=${{ github.ref }}"
           echo "event=${{ github.event_name }}"
+          echo "commit=${{ github.sha }}"
 
-      # 7. Temporary OIDC debug
+      # 7. Show actual OIDC subject
       - name: Show Actual OIDC Subject
         shell: bash
         run: |
@@ -87,58 +89,65 @@ jobs:
           print("ref =", claims.get("ref"))
           PY
 
-      # 8. Authenticate GitHub Actions to AWS using OIDC
+      # 8. Authenticate to AWS using GitHub OIDC
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::434655688160:role/hello-eks-github-role
           aws-region: ap-south-1
 
-      # 9. Verify AWS authentication
+      # 9. Verify AWS identity
       - name: Verify AWS Identity
         run: aws sts get-caller-identity
 
-      # 10. Login Docker to ECR
+      # 10. Login to Amazon ECR
       - name: Login to Amazon ECR
-        id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # 11. Tag + Push Docker image
+      # 11. Tag and push Docker image to ECR
       - name: Tag and Push Docker Image to ECR
         run: |
-          docker tag hello-eks-pipeline:1.0 \
-            434655688160.dkr.ecr.ap-south-1.amazonaws.com/hello-eks-pipeline:1.0
+          docker tag \
+            hello-eks-pipeline:${{ github.sha }} \
+            434655688160.dkr.ecr.ap-south-1.amazonaws.com/hello-eks-pipeline:${{ github.sha }}
 
           docker push \
-            434655688160.dkr.ecr.ap-south-1.amazonaws.com/hello-eks-pipeline:1.0
+            434655688160.dkr.ecr.ap-south-1.amazonaws.com/hello-eks-pipeline:${{ github.sha }}
 
-      # 12. Connect runner to EKS
+      # 12. Connect GitHub runner to EKS
       - name: Configure EKS
         run: |
           aws eks update-kubeconfig \
             --region ap-south-1 \
             --name hello-eks-cluster
 
-      # 13. Verify EKS access
+      # 13. Verify EKS connection
       - name: Verify EKS Connection
         run: kubectl get nodes
 
-      # 14. Deploy Kubernetes YAMLs
-      - name: Deploy to EKS
+      # 14. Apply Kubernetes base resources
+      - name: Apply Kubernetes Resources
         run: |
           kubectl apply -f k8s/service-account.yml
-          kubectl apply -f k8s/deployment.yml
           kubectl apply -f k8s/service.yml
+          kubectl apply -f k8s/deployment.yml
 
-      # 15. Verify deployment rollout
+      # 15. Replace deployment image with current Git commit image
+      - name: Deploy Current Git Version
+        run: |
+          kubectl set image deployment/hello-eks-deployment \
+            hello-eks-container=434655688160.dkr.ecr.ap-south-1.amazonaws.com/hello-eks-pipeline:${{ github.sha }}
+
+      # 16. Wait for rollout to complete
       - name: Verify Deployment Rollout
         run: |
           kubectl rollout status deployment/hello-eks-deployment \
             --timeout=180s
 
-      # 16. Show running resources
+      # 17. Show final resources
       - name: Show EKS Resources
         run: |
           kubectl get nodes
+          kubectl get deployments
           kubectl get pods -o wide
           kubectl get svc
