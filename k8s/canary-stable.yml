@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: hello-eks-stable
+
+spec:
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: hello-canary
+      track: stable
+
+  template:
+    metadata:
+      labels:
+        app: hello-canary
+        track: stable
+
+    spec:
+      serviceAccountName: hello-eks-service-account
+
+      containers:
+        - name: hello-eks-container
+          image: 434655688160.dkr.ecr.ap-south-1.amazonaws.com/hello-eks-pipeline:bb8a07c6bf2deda9840bf5fb2a11396f285d14f0
+
+          ports:
+            - containerPort: 8080
