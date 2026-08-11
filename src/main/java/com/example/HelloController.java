@@ -10,4 +10,9 @@ public class HelloController {
     public String hello() {
         return "Hello EKS Pipeline";
     }
+
+    @GetMapping("/hello2")
+    public String hello2() {
+        return "Hello2 EKS Pipeline";
+    }
 }
