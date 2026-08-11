@@ -26,11 +26,13 @@ jobs:
           java-version: '21'
           cache: maven
 
-      # 3. Build
+      # 3. Maven Build
+      # Temporarily skipping tests because GitHub runner
+      # cannot directly reach our RDS.
       - name: Build Spring Boot Application
         run: mvn clean package -DskipTests
 
-      # 4. Sonar
+      # 4. SonarQube Scan
       - name: SonarQube Scan
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -40,18 +42,18 @@ jobs:
           -Dsonar.projectKey=nebasishp_hello-eks-pipeline
           -Dsonar.token=${{ secrets.SONAR_TOKEN }}
 
-      # 5. Docker build
+      # 5. Build Docker Image
       - name: Build Docker Image
         run: docker build -t hello-eks-pipeline:1.0 .
 
-      # 6. Normal GitHub context
+      # 6. Temporary GitHub debug
       - name: Debug GitHub Context
         run: |
           echo "repository=${{ github.repository }}"
           echo "ref=${{ github.ref }}"
           echo "event=${{ github.event_name }}"
 
-      # 7. IMPORTANT - show actual OIDC claims
+      # 7. Temporary OIDC debug
       - name: Show Actual OIDC Subject
         shell: bash
         run: |
@@ -85,19 +87,58 @@ jobs:
           print("ref =", claims.get("ref"))
           PY
 
-      # 8. AWS OIDC login
+      # 8. Authenticate GitHub Actions to AWS using OIDC
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::434655688160:role/hello-eks-github-role
           aws-region: ap-south-1
+
+      # 9. Verify AWS authentication
+      - name: Verify AWS Identity
+        run: aws sts get-caller-identity
+
+      # 10. Login Docker to ECR
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
+
+      # 11. Tag + Push Docker image
       - name: Tag and Push Docker Image to ECR
         run: |
-          docker tag hello-eks-pipeline:1.0 434655688160.dkr.ecr.ap-south-1.amazonaws.com/hello-eks-pipeline:1.0
-          docker push 434655688160.dkr.ecr.ap-south-1.amazonaws.com/hello-eks-pipeline:1.0
-      # 9. Verify AWS identity
-      - name: Verify AWS Identity
-        run: aws sts get-caller-identity
+          docker tag hello-eks-pipeline:1.0 \
+            434655688160.dkr.ecr.ap-south-1.amazonaws.com/hello-eks-pipeline:1.0
+
+          docker push \
+            434655688160.dkr.ecr.ap-south-1.amazonaws.com/hello-eks-pipeline:1.0
+
+      # 12. Connect runner to EKS
+      - name: Configure EKS
+        run: |
+          aws eks update-kubeconfig \
+            --region ap-south-1 \
+            --name hello-eks-cluster
+
+      # 13. Verify EKS access
+      - name: Verify EKS Connection
+        run: kubectl get nodes
+
+      # 14. Deploy Kubernetes YAMLs
+      - name: Deploy to EKS
+        run: |
+          kubectl apply -f k8s/service-account.yml
+          kubectl apply -f k8s/deployment.yml
+          kubectl apply -f k8s/service.yml
+
+      # 15. Verify deployment rollout
+      - name: Verify Deployment Rollout
+        run: |
+          kubectl rollout status deployment/hello-eks-deployment \
+            --timeout=180s
+
+      # 16. Show running resources
+      - name: Show EKS Resources
+        run: |
+          kubectl get nodes
+          kubectl get pods -o wide
+          kubectl get svc
