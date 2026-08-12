@@ -1,5 +1,7 @@
 package com.example.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.secretsmanager.SecretsManagerClient;
@@ -8,17 +10,30 @@ import software.amazon.awssdk.services.secretsmanager.model.GetSecretValueReques
 @Service
 public class RdsSecretService {
 
-    public String getSecret() {
+    private final ObjectMapper objectMapper;
 
-        try (SecretsManagerClient client = SecretsManagerClient.builder()
-                .region(Region.AP_SOUTH_1)
-                .build()) {
+    public RdsSecretService(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+    }
 
-            return client.getSecretValue(
+    public JsonNode getSecret() {
+
+        try (SecretsManagerClient client =
+                     SecretsManagerClient.builder()
+                             .region(Region.AP_SOUTH_1)
+                             .build()) {
+
+            String secretString = client.getSecretValue(
                     GetSecretValueRequest.builder()
                             .secretId("hello-eks/rds")
                             .build()
             ).secretString();
+
+            return objectMapper.readTree(secretString);
+
+        } catch (Exception e) {
+            throw new RuntimeException(
+                    "Unable to read RDS secret from Secrets Manager", e);
         }
     }
 }

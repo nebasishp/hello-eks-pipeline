@@ -69,6 +69,10 @@
             <artifactId>secretsmanager</artifactId>
             <version>2.32.32</version>
         </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
     </dependencies>
     <dependencyManagement>
         <dependencies>
