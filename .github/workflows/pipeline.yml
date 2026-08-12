@@ -17,8 +17,11 @@ env:
 
 jobs:
 
+  # =========================================================
+  # JOB 1 - BUILD
+  # =========================================================
   build:
-    name: Build
+    name: 1 - Build Application
     runs-on: ubuntu-latest
 
     steps:
@@ -32,12 +35,15 @@ jobs:
           java-version: '21'
           cache: maven
 
-      - name: Build Spring Boot Application
+      - name: Maven Build
         run: mvn clean package -DskipTests
 
 
+  # =========================================================
+  # JOB 2 - SONAR
+  # =========================================================
   sonar:
-    name: Sonar Analysis
+    name: 2 - Sonar Analysis
     needs: build
     runs-on: ubuntu-latest
 
@@ -62,8 +68,16 @@ jobs:
           -Dsonar.token=${{ secrets.SONAR_TOKEN }}
 
 
+  # =========================================================
+  # JOB 3 - DOCKER BUILD + PUSH TO ECR
+  #
+  # IMPORTANT:
+  # Every GitHub job gets a NEW runner.
+  # Therefore target/*.jar from JOB 1 does NOT exist here.
+  # We build the JAR again before docker build.
+  # =========================================================
   docker-ecr:
-    name: Docker Build and ECR Push
+    name: 3 - Docker Build and ECR Push
     needs: sonar
     runs-on: ubuntu-latest
 
@@ -71,7 +85,17 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Configure AWS Credentials
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Build JAR for Docker
+        run: mvn clean package -DskipTests
+
+      - name: Configure AWS Credentials using OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::434655688160:role/hello-eks-github-role
@@ -88,32 +112,48 @@ jobs:
           docker build \
             -t $ECR_REPOSITORY:${{ github.sha }} .
 
-      - name: Push Docker Image to ECR
+      - name: Tag Docker Image
         run: |
           docker tag \
             $ECR_REPOSITORY:${{ github.sha }} \
             $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }}
 
+      - name: Push Docker Image to ECR
+        run: |
           docker push \
             $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }}
 
 
+  # =========================================================
+  # JOB 4 - BLUE/GREEN DEPLOYMENT
+  # =========================================================
   deploy:
-    name: Deploy Blue Green
+    name: 4 - Blue Green Deploy
     needs: docker-ecr
     runs-on: ubuntu-latest
 
     outputs:
-      active-color: ${{ steps.colors.outputs.active }}
+      old-color: ${{ steps.colors.outputs.active }}
       new-color: ${{ steps.colors.outputs.inactive }}
 
     steps:
-      - name: Configure AWS Credentials
+
+      # -------------------------------------------------------
+      # AWS AUTHENTICATION
+      # -------------------------------------------------------
+      - name: Configure AWS Credentials using OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::434655688160:role/hello-eks-github-role
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Verify AWS Identity
+        run: aws sts get-caller-identity
+
+
+      # -------------------------------------------------------
+      # CONNECT GITHUB RUNNER TO EKS
+      # -------------------------------------------------------
       - name: Configure EKS
         run: |
           aws eks update-kubeconfig \
@@ -123,6 +163,13 @@ jobs:
       - name: Verify EKS Connection
         run: kubectl get nodes
 
+
+      # -------------------------------------------------------
+      # DETERMINE CURRENT ACTIVE COLOR
+      #
+      # BLUE live  -> deploy GREEN
+      # GREEN live -> deploy BLUE
+      # -------------------------------------------------------
       - name: Find Active and Inactive Color
         id: colors
         shell: bash
@@ -130,12 +177,16 @@ jobs:
           ACTIVE=$(kubectl get service hello-eks-service \
             -o jsonpath='{.spec.selector.version}')
 
-          echo "Current active color = $ACTIVE"
+          echo "Current LIVE color = $ACTIVE"
 
           if [ "$ACTIVE" = "blue" ]; then
             INACTIVE="green"
-          else
+          elif [ "$ACTIVE" = "green" ]; then
             INACTIVE="blue"
+          else
+            echo "ERROR: Service selector version is '$ACTIVE'"
+            echo "Expected blue or green."
+            exit 1
           fi
 
           echo "New version will deploy to = $INACTIVE"
@@ -143,16 +194,32 @@ jobs:
           echo "active=$ACTIVE" >> "$GITHUB_OUTPUT"
           echo "inactive=$INACTIVE" >> "$GITHUB_OUTPUT"
 
-      - name: Deploy New Version to Inactive Color
+
+      # -------------------------------------------------------
+      # DEPLOY NEW IMAGE TO INACTIVE COLOR
+      # -------------------------------------------------------
+      - name: Deploy New Image to Inactive Color
         shell: bash
         run: |
           INACTIVE="${{ steps.colors.outputs.inactive }}"
+
+          echo "Deploying Git SHA:"
+          echo "${{ github.sha }}"
+
+          echo "Deploying to:"
+          echo "$INACTIVE"
 
           kubectl set image \
             deployment/hello-eks-$INACTIVE \
             hello-eks-container=$ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }}
 
-      - name: Wait for New Version
+
+      # -------------------------------------------------------
+      # WAIT FOR NEW VERSION
+      #
+      # Traffic is still going to OLD version at this point.
+      # -------------------------------------------------------
+      - name: Wait for New Deployment
         shell: bash
         run: |
           INACTIVE="${{ steps.colors.outputs.inactive }}"
@@ -161,6 +228,10 @@ jobs:
             deployment/hello-eks-$INACTIVE \
             --timeout=180s
 
+
+      # -------------------------------------------------------
+      # SHOW BLUE/GREEN STATE BEFORE SWITCH
+      # -------------------------------------------------------
       - name: Show Blue Green Pods
         run: |
           kubectl get pods \
@@ -168,64 +239,138 @@ jobs:
             -o wide \
             --show-labels
 
-      - name: Switch Traffic
+
+      # -------------------------------------------------------
+      # SWITCH PRODUCTION TRAFFIC
+      # -------------------------------------------------------
+      - name: Switch Traffic to New Version
         shell: bash
         run: |
           INACTIVE="${{ steps.colors.outputs.inactive }}"
+
+          echo "Switching service to $INACTIVE"
 
           kubectl patch service hello-eks-service \
             --type merge \
             -p "{\"spec\":{\"selector\":{\"app\":\"hello-eks\",\"version\":\"$INACTIVE\"}}}"
 
 
-  verify:
-    name: Verify Deployment
-    needs: deploy
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::434655688160:role/hello-eks-github-role
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Configure EKS
+      # -------------------------------------------------------
+      # IMMEDIATE SELECTOR CHECK
+      # -------------------------------------------------------
+      - name: Check Service Selector
         run: |
-          aws eks update-kubeconfig \
-            --region $AWS_REGION \
-            --name $EKS_CLUSTER
-
-      - name: Verify Active Color
-        run: |
-          echo "Previous color: ${{ needs.deploy.outputs.active-color }}"
-          echo "New live color: ${{ needs.deploy.outputs.new-color }}"
-
-          echo "Service currently points to:"
+          echo "hello-eks-service now points to:"
 
           kubectl get service hello-eks-service \
             -o jsonpath='{.spec.selector.version}'
 
           echo ""
 
-      - name: Verify Service Endpoint
+
+  # =========================================================
+  # JOB 5 - VERIFY PRODUCTION DEPLOYMENT
+  # =========================================================
+  verify:
+    name: 5 - Verify Deployment
+    needs: deploy
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # -------------------------------------------------------
+      # AWS AUTHENTICATION
+      # -------------------------------------------------------
+      - name: Configure AWS Credentials using OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::434655688160:role/hello-eks-github-role
+          aws-region: ${{ env.AWS_REGION }}
+
+
+      # -------------------------------------------------------
+      # CONNECT TO EKS
+      # -------------------------------------------------------
+      - name: Configure EKS
+        run: |
+          aws eks update-kubeconfig \
+            --region $AWS_REGION \
+            --name $EKS_CLUSTER
+
+
+      # -------------------------------------------------------
+      # VERIFY BLUE/GREEN SWITCH
+      # -------------------------------------------------------
+      - name: Verify Active Color
+        shell: bash
+        run: |
+          OLD_COLOR="${{ needs.deploy.outputs.old-color }}"
+          EXPECTED_COLOR="${{ needs.deploy.outputs.new-color }}"
+
+          ACTUAL_COLOR=$(kubectl get service hello-eks-service \
+            -o jsonpath='{.spec.selector.version}')
+
+          echo "Old color      = $OLD_COLOR"
+          echo "Expected color = $EXPECTED_COLOR"
+          echo "Actual color   = $ACTUAL_COLOR"
+
+          if [ "$ACTUAL_COLOR" != "$EXPECTED_COLOR" ]; then
+            echo "ERROR: Blue/Green traffic switch verification failed."
+            exit 1
+          fi
+
+          echo "Blue/Green traffic switch verified successfully."
+
+
+      # -------------------------------------------------------
+      # VERIFY SERVICE ENDPOINTS
+      # -------------------------------------------------------
+      - name: Verify Service Endpoints
         run: |
           kubectl get endpointslices \
             -l kubernetes.io/service-name=hello-eks-service \
             -o wide
 
+
+      # -------------------------------------------------------
+      # VERIFY PODS
+      # -------------------------------------------------------
       - name: Verify Running Pods
         run: |
-          kubectl get pods -l app=hello-eks -o wide
+          kubectl get pods \
+            -l app=hello-eks \
+            -o wide
 
-      - name: Final Deployment Status
+
+      # -------------------------------------------------------
+      # VERIFY DEPLOYMENTS
+      # -------------------------------------------------------
+      - name: Verify Deployments
         run: |
-          echo "================================"
-          echo "BLUE GREEN DEPLOYMENT COMPLETE"
-          echo "================================"
-
-          echo ""
           kubectl get deployments
 
+
+      # -------------------------------------------------------
+      # FINAL STATUS
+      # -------------------------------------------------------
+      - name: Final Pipeline Status
+        run: |
+          echo "======================================"
+          echo " BLUE GREEN DEPLOYMENT COMPLETE"
+          echo "======================================"
+
           echo ""
+          echo "Old live color:"
+          echo "${{ needs.deploy.outputs.old-color }}"
+
+          echo ""
+          echo "New live color:"
+          echo "${{ needs.deploy.outputs.new-color }}"
+
+          echo ""
+          echo "Current service:"
           kubectl get svc hello-eks-service
+
+          echo ""
+          echo "Current pods:"
+          kubectl get pods -l app=hello-eks -o wide
