@@ -10,11 +10,7 @@ import software.amazon.awssdk.services.secretsmanager.model.GetSecretValueReques
 @Service
 public class RdsSecretService {
 
-    private final ObjectMapper objectMapper;
-
-    public RdsSecretService(ObjectMapper objectMapper) {
-        this.objectMapper = objectMapper;
-    }
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     public JsonNode getSecret() {
 
