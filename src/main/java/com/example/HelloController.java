@@ -21,6 +21,6 @@ public class HelloController {
     @GetMapping("/secret-test")
     public String secretTest() {
         rdsSecretService.getSecret();
-        return "Secrets Manager access SUCCESS..";
+        return "Secrets Manager access SUCCESS...";
     }
 }
